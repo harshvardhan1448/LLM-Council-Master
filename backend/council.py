@@ -158,20 +158,64 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
     messages = [{"role": "user", "content": chairman_prompt}]
 
-    # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+    # Try chairman first.
+    response = await query_model(CHAIRMAN_MODEL, messages, timeout=180.0)
 
-    if response is None:
-        # Fallback if chairman fails
+    if response is not None:
         return {
             "model": CHAIRMAN_MODEL,
-            "response": "Error: Unable to generate final synthesis."
+            "response": response.get('content', '')
         }
 
+    # If chairman fails, try council models as backup synthesizers.
+    backup_models = [m for m in COUNCIL_MODELS if m != CHAIRMAN_MODEL]
+    for backup_model in backup_models:
+        backup_response = await query_model(backup_model, messages, timeout=180.0)
+        if backup_response is not None:
+            return {
+                "model": backup_model,
+                "response": backup_response.get('content', '')
+            }
+
+    # Last resort: surface the best available Stage 1 response instead of an error.
+    fallback_model, fallback_response = _pick_best_available_response(stage1_results, stage2_results)
     return {
-        "model": CHAIRMAN_MODEL,
-        "response": response.get('content', '')
+        "model": fallback_model,
+        "response": (
+            "Chairman synthesis was unavailable, so this is the best available council response based on peer rankings.\n\n"
+            f"{fallback_response}"
+        )
     }
+
+
+def _pick_best_available_response(
+    stage1_results: List[Dict[str, Any]],
+    stage2_results: List[Dict[str, Any]]
+) -> Tuple[str, str]:
+    """
+    Pick the best available Stage 1 response using Stage 2 rankings.
+
+    If rankings cannot be parsed, fall back to the first successful Stage 1 response.
+    """
+    if not stage1_results:
+        return "error", "No council responses were available."
+
+    # Reconstruct anonymous labels to map ranked labels back to model names.
+    labels = [chr(65 + i) for i in range(len(stage1_results))]
+    label_to_model = {
+        f"Response {label}": result["model"]
+        for label, result in zip(labels, stage1_results)
+    }
+
+    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+    if aggregate_rankings:
+        best_model = aggregate_rankings[0]["model"]
+        for result in stage1_results:
+            if result["model"] == best_model:
+                return best_model, result.get("response", "")
+
+    first = stage1_results[0]
+    return first.get("model", "unknown"), first.get("response", "")
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:

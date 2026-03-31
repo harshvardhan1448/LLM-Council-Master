@@ -29,6 +29,7 @@ async def query_model(
     payload = {
         "model": model,
         "messages": messages,
+        "max_tokens": 8000,
     }
 
     try:
@@ -38,18 +39,37 @@ async def query_model(
                 headers=headers,
                 json=payload
             )
-            response.raise_for_status()
+
+            if response.status_code != 200:
+                print(f"Error querying model {model}: HTTP {response.status_code}")
+                print(f"Response body: {response.text[:500]}")
+                return None
 
             data = response.json()
-            message = data['choices'][0]['message']
 
+            if 'error' in data:
+                print(f"API error for model {model}: {data['error']}")
+                return None
+
+            message = data['choices'][0]['message']
+            # Ensure we always have some content to return
+            content = message.get('content')
+            if not content:
+                # If the model returned tool calls without direct content, serialize them
+                if 'tool_calls' in message:
+                    content = f"[Tool calls: {message['tool_calls']}]"
+                else:
+                    content = "[No content returned]"
             return {
-                'content': message.get('content'),
+                'content': content,
                 'reasoning_details': message.get('reasoning_details')
             }
 
+    except httpx.TimeoutException:
+        print(f"Timeout querying model {model} (timeout={timeout}s)")
+        return None
     except Exception as e:
-        print(f"Error querying model {model}: {e}")
+        print(f"Error querying model {model}: {type(e).__name__}: {e}")
         return None
 
 

@@ -152,6 +152,28 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             stage1_results = await stage1_collect_responses(request.content)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
+            # If all models failed in Stage 1, send a terminal Stage 3 message and stop.
+            if not stage1_results:
+                stage3_result = {
+                    "model": "error",
+                    "response": "All models failed to respond. Please try again."
+                }
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+
+                if title_task:
+                    title = await title_task
+                    storage.update_conversation_title(conversation_id, title)
+                    yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+
+                storage.add_assistant_message(
+                    conversation_id,
+                    stage1_results,
+                    [],
+                    stage3_result
+                )
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                return
+
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
